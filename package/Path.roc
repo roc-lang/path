@@ -4,10 +4,15 @@ module [
     unixBytes,
     windows,
     windowsU16s,
+    ext,
+    extStr,
     filename,
+    filenameStr,
     toStr,
     toStrWindows,
     toStrUnix,
+    concat,
+    normalize,
     display,
     displayUnix,
     displayWindows,
@@ -155,6 +160,169 @@ concat = \@Path p1, @Path p2 ->
         (Unix list1, Unix list2) -> unixBytes (List.concat list1 list2)
         (Windows list1, Unix list2) -> windowsU16s (List.concat list1 (unixToWindows list2))
         (Unix list1, Windows list2) -> unixBytes (List.concat list1 (windowsToUnix list2))
+
+## Normalizes the path by simplifying redundant parts.
+##
+## If the path was created with [Path.unix], this does the following:
+## 1. Replaces `foo/bar/../baz/` with `foo/baz/` (and does the same with `\` on Windows).
+## 2. Replaces `foo/./bar/` with `foo/bar/` (and does the same with `\` on Windows).
+## 3. Replaces repeated path separators (e.g. `//`) with one path separator.
+## 4. If the path contains any `"\u(0)"`s, ends the path before the first one. (See [fromRaw] for why this would be helpful.)
+##
+## If the path was created with [Path.windows], this does the same thing except that it considers `/`
+## and `\` to be equivalent (since Windows considers both to be directory separators), and normalizes
+## all directory separators to `\`s in the returned path.
+##
+## Note that operating systems generally do not normalize symlinks, which means that normalizing a path
+## can change program behavior! For example, if there is a symlink in the operating system which
+## contains two consecitive file separators, then normalizing could mean that a path which previously
+## would have resolved using that symlink will no longer involve the symlink.
+##
+## The process of normalizing while also resolving symlinks is known as *canonicalization*. Operating
+## systems already canonicalize paths automatically before operating on them, so typically the only
+## reason to explicitly canonicalize them in a program is to display or record the canonicalized path.
+## Canonicalizing paths is out of scope for this module, because it requires a [Task] that talks to
+## the operating system (symlinks can change on disk in the middle of a running program, so there's
+## no way to get a canonicalized path besides asking the OS for it), and this module is designed not
+## to depend on talking to the operating system.
+normalize : Path -> Path
+normalize = \@Path path ->
+    when path is
+        Windows u16s ->
+            List.withCapacity (List.len u16s)
+            |> normalizeWindows u16s
+            |> Windows
+            |> @Path
+
+        Unix bytes ->
+            List.withCapacity (List.len bytes)
+            |> normalizeUnix bytes
+            |> Unix
+            |> @Path
+
+normalizeWindows : List U16, List U16 -> List U16
+normalizeWindows = \answer, remaining ->
+    when remaining is
+        ['/', '/', ..] | ['/', '\\', ..] | ['\\', '/', ..] | ['\\', '\\', ..] ->
+            # Collapse consecutive separators into one backslash.
+            answer
+            |> List.append '\\'
+            |> normalizeWindows (remaining |> List.dropFirst 2)
+
+        ['/', '.', '/', ..] | ['/', '.', '\\', ..] | ['\\', '.', '/', ..] | ['\\', '.', '\\', ..] ->
+            # Normalize separator-dot-separator into one backslash.
+            answer
+            |> List.append '\\'
+            |> normalizeWindows remaining
+
+        ['/', '.', '.', '/', ..] | ['\\', '.', '.', '/', ..] | ['/', '.', '.', '\\', ..] | ['\\', '.', '.', '\\', ..] ->
+            # "/../" means we should delete the component we most recently added.
+            when List.findLastIndex answer (\u16 -> u16 == '/' || u16 == '\\') is
+                Ok lastSepIndex ->
+                    lenToDelete = List.len answer |> Num.subWrap lastSepIndex
+
+                    # Example:
+                    #     "foo/things"
+                    #     lastSepIndex = 3
+                    #     lenToDelete = 10 - 3 = 7
+                    #     |> List.dropLast 7 yields "foo" as desired
+
+                    answer
+                    |> List.dropLast lenToDelete
+                    |> List.append '\\' # replace the "/../" with one backslash
+                    |> normalizeWindows (remaining |> List.dropFirst 4)
+
+                Err NotFound ->
+                    # There are no separators in the answer we've accumulated so far.
+                    if List.isEmpty answer then
+                        # If the answer was empty (e.g. the whole input path begins with "/../"),
+                        # then the input path was invalid, and we leave it alone. (We don't want to
+                        # have normalize change an invalid path to a different and potentially valid
+                        # one!) It's fine if the path itself begins with "../" - so don't change that.
+                        answer
+                        |> List.concat ['\\', '.', '.', '\\']
+                        |> normalizeWindows (remaining |> List.dropFirst 4)
+                    else
+                        # If the path was nonempty, then we eliminate everything up to this point -
+                        # e.g. normalizing `foo/../bar` to `bar`
+                        answer # TODO this comment should appear on the next line; formatter bug!
+                        # Drop all the elements instead of starting over with empty list,
+                        # in order to keep the capacity we already reserved on the heap.
+                        |> List.dropFirst (List.len answer)
+                        |> normalizeWindows (remaining |> List.dropFirst 4)
+
+        [0, ..] | [] ->
+            # If we encounter a zero, we're immediately done. Drop the zero and everything after it!
+            # We're also done if we ran out of remaining elements to process.
+            answer
+
+        [next, ..] ->
+            # This element is unremarkable; copy it into the answer and keep moving
+            answer
+            |> List.append next
+            |> normalizeWindows (remaining |> List.dropFirst 1)
+
+normalizeUnix : List U8, List U8 -> List U8
+normalizeUnix = \answer, remaining ->
+    when remaining is
+        ['/', '/', ..] ->
+            # Collapse consecutive separators into one slash.
+            answer
+            |> List.append '/'
+            |> normalizeUnix (remaining |> List.dropFirst 2)
+
+        ['/', '.', '/', ..] ->
+            # Normalize separator-dot-separator into one backslash.
+            answer
+            |> List.append '\\'
+            |> normalizeUnix remaining
+
+        ['/', '.', '.', '/', ..] ->
+            # "/../" means we should delete the component we most recently added.
+            when List.findLastIndex answer (\byte -> byte == '/') is
+                Ok lastSepIndex ->
+                    lenToDelete = List.len answer |> Num.subWrap lastSepIndex
+
+                    # Example:
+                    #     "foo/things"
+                    #     lastSepIndex = 3
+                    #     lenToDelete = 10 - 3 = 7
+                    #     |> List.dropLast 7 yields "foo" as desired
+
+                    answer
+                    |> List.dropLast lenToDelete
+                    |> List.append '/' # replace the "/../" with one slash
+                    |> normalizeUnix (remaining |> List.dropFirst 4)
+
+                Err NotFound ->
+                    # There are no separators in the answer we've accumulated so far.
+                    if List.isEmpty answer then
+                        # If the answer was empty (e.g. the whole input path begins with "/../"),
+                        # then the input path was invalid, and we leave it alone. (We don't want to
+                        # have normalize change an invalid path to a different and potentially valid
+                        # one!) It's fine if the path itself begins with "../" - so don't change that.
+                        answer
+                        |> List.concat ['/', '.', '.', '/']
+                        |> normalizeUnix (remaining |> List.dropFirst 4)
+                    else
+                        # If the path was nonempty, then we eliminate everything up to this point -
+                        # e.g. normalizing `foo/../bar` to `bar`
+                        answer # TODO this comment should appear on the next line; formatter bug!
+                        # Drop all the elements instead of starting over with empty list,
+                        # in order to keep the capacity we already reserved on the heap.
+                        |> List.dropFirst (List.len answer)
+                        |> normalizeUnix (remaining |> List.dropFirst 4)
+
+        [0, ..] | [] ->
+            # If we encounter a zero, we're immediately done. Drop the zero and everything after it!
+            # We're also done if we ran out of remaining elements to process.
+            answer
+
+        [next, ..] ->
+            # This element is unremarkable; copy it into the answer and keep moving
+            answer
+            |> List.append next
+            |> normalizeUnix (remaining |> List.dropFirst 1)
 
 ## Returns a string representation of the path, replacing anything that can't be
 ## represented in a string with the Unicode Replacement Character.
