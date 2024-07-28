@@ -6,12 +6,13 @@ module [
     windowsU16s,
     filename,
     toStr,
-    toNums,
     toStrWindows,
     toStrUnix,
     display,
     displayUnix,
     displayWindows,
+    toRaw,
+    fromRaw,
 ]
 
 Path := [
@@ -176,7 +177,7 @@ displayUnix : Path -> Str
 
 ## If any content is encountered that can't be converted to a [Str],
 ## returns the index into the underlying [List] of data (which can be obtained
-## from the [Path] using [toNums]) where that content was encountered.
+## from the [Path] using [toRaw]) where that content was encountered.
 toStr : Path -> Result Str [InvalidStr U64]
 toStr = \@Path path ->
     when path is
@@ -198,5 +199,26 @@ toStrUnix : Path -> Result Str [InvalidStr U64]
 
 ## Converts the given [Path] to either a [List U8] (if the path was created
 ## using [Path.unix]) or a [List U16] (if the path was created with [Path.windows]).
-toNums : Path -> [Windows (List U16), Unix (List U8)]
-toNums = \@Path path -> path
+toRaw : Path -> [Windows (List U16), Unix (List U8)]
+toRaw = \@Path path -> path
+
+## Takes the output of a [toRaw] call and returns a [Path].
+##
+## This function is most often called by platforms, passing values that were received
+## directly from the operating system. To maximize performance, no validation is performed
+## on the provided lists. Here are some ways the lists can be invalid, and what
+## the consequences will be if they are:
+##
+## * If a `Windows` list contains any numbers beween 1 and 31, then the path is not a valid Windows path. All the operations in this `Path` module will work as normal (e.g. [ext], [display], etc.), but if you try to use the path with any operation system functions (like reading a file from disk), Windows will give an error.
+## * If either a `Windows` or `Unix` list contains any zeroes, then the operating system will ignore the zero as well as everything that comes after it. (Once again, all the operations in this `Path` module will work as normal.)
+##
+## The reason this function does not perform validation is that it will almost always
+## be called by platforms, passing lists that are definitely valid because they came directly from
+## the operating system. For example, when returning the contents of a (maybe very large) directory,
+## a validation function would have to spend time verifying each of those entries, even though it
+## would always pass.
+##
+## In the unusual situation where this function isn't being called by a platform,
+## accidentally passing invalid lists is possible, but it's an unlikely mistake to make.
+fromRaw : [Windows (List U16), Unix (List U8)] -> Path
+fromRaw = \raw -> @Path raw
