@@ -199,4 +199,4 @@ toStrUnix : Path -> Result Str [InvalidStr U64]
 ## Converts the given [Path] to either a [List U8] (if the path was created
 ## using [Path.unix]) or a [List U16] (if the path was created with [Path.windows]).
 toNums : Path -> [Windows (List U16), Unix (List U8)]
-toNums \@Path path -> path
+toNums = \@Path path -> path
