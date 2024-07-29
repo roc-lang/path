@@ -204,10 +204,19 @@ normalizeWindows : List U16, List U16 -> List U16
 normalizeWindows = \answer, remaining ->
     when remaining is
         ['/', '/', ..] | ['/', '\\', ..] | ['\\', '/', ..] | ['\\', '\\', ..] ->
-            # Collapse consecutive separators into one backslash.
-            answer
-            |> List.append '\\'
-            |> normalizeWindows (remaining |> List.dropFirst 2)
+            if List.isEmpty answer then
+                # At the very beginning of a Windows path, two backslashes
+                # (either of which could be slashes instead) means a UNC Path
+                # and should be preserved. See https://learn.microsoft.com/en-us/dotnet/standard/io/file-path-formats#unc-paths
+                answer
+                |> List.append '\\'
+                |> List.append '\\'
+                |> normalizeWindows (remaining |> List.dropFirst 2)
+            else
+                # Collapse other consecutive separators into one backslash.
+                answer
+                |> List.append '\\'
+                |> normalizeWindows (remaining |> List.dropFirst 2)
 
         ['/', '.', '/', ..] | ['/', '.', '\\', ..] | ['\\', '.', '/', ..] | ['\\', '.', '\\', ..] ->
             # Normalize separator-dot-separator into one backslash.
