@@ -79,7 +79,7 @@ strToUtf16 = \str ->
                         |> Num.toU16
 
                     if codePoint > 0xFFFF then
-                        highSurrogate = 0xD800 + (((codePoint - 0x10000) |> Num.shiftRightBy 10) |> Num.bitwiseAnd 0x3FF)
+                        highSurrogate = 0xD800 + (((codePoint - 0x1000) |> Num.shiftRightBy 10) |> Num.bitwiseAnd 0x3FF)
                         crash ""
                         #    lowSurrogate = 0xDC00 + ((codePoint - 0x10000) |> Num.bitwiseAnd 0x3FF)
                         #    state
