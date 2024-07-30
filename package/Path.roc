@@ -8,6 +8,7 @@ module [
     extStr,
     filename,
     filenameStr,
+    join,
     toStr,
     toStrWindows,
     toStrUnix,
@@ -24,6 +25,7 @@ Path := [
     Unix (List U8),
     Windows (List U16),
 ]
+    implements [Eq]
 
 unix : Str -> Path
 unix = \str -> @Path (Unix (Str.toUtf8 str))
@@ -40,6 +42,55 @@ windowsU16s = \list -> @Path (Windows list)
 # TODO these functions need to be available.
 # Could depend on roc/unicode, but they're so simple it's probably nicer for end users to inline them.
 strToUtf16 : Str -> List U16
+strToUtf16 = \str ->
+    utf8 = Str.toUtf8 str
+    len = List.len utf8
+    crashInvalid = \numBytes ->
+        crash "A Str contained an invalid $(Num.toStr numBytes)-byte UTF-8 sequence. This should never happen!"
+
+    List.walkWithIndex utf8 (List.withCapacity len) \state, b, index ->
+        ## 1-byte (ASCII) code unit
+        if b < 0x80 then
+            state
+            |> List.append (Num.toU16 b)
+            ## 2-byte sequence
+            # else if b < 0xE0 then
+            #    when (List.get utf8 (index + 1)) is
+            #        Ok nextByte ->
+            #            state
+            #            |> List.append (Num.toU16 (((b |> Num.bitwiseAnd 0x1F) |> Num.shiftLeftBy 6) |> Num.bitwiseOr (nextByte |> Num.bitwiseAnd 0x3F)))
+            #        Err NotFound -> crashInvalid 2
+            ## 3-byte sequence
+            # else if b < 0xF0 then
+            #    when (List.get utf8 (index + 1), List.get utf8 (index + 2)) is
+            #        (Ok nextByte1, Ok nextByte2) ->
+            #            state
+            #            |> List.append (Num.toU16 (((b |> Num.bitwiseAnd 0x0F) |> Num.shiftLeftBy 12) |> Num.bitwiseOr ((nextByte1 |> Num.bitwiseAnd 0x3F) |> Num.shiftLeftBy 6) |> Num.bitwiseOr (nextByte2 |> Num.bitwiseAnd 0x3F)))
+            #        (_, _) -> crashInvalid 3
+            # 4-byte sequence
+        else
+            when (List.get utf8 (index + 1), List.get utf8 (index + 2), List.get utf8 (index + 3)) is
+                (Ok nextByte1, Ok nextByte2, Ok nextByte3) ->
+                    codePoint =
+                        (b |> Num.bitwiseAnd 0x07 |> Num.shiftLeftBy 18)
+                        |> Num.bitwiseOr ((nextByte1 |> Num.bitwiseAnd 0x3F) |> Num.shiftLeftBy 12)
+                        |> Num.bitwiseOr ((nextByte2 |> Num.bitwiseAnd 0x3F) |> Num.shiftLeftBy 6)
+                        |> Num.bitwiseOr (nextByte3 |> Num.bitwiseAnd 0x3F)
+                        |> Num.toU16
+
+                    if codePoint > 0xFFFF then
+                        highSurrogate = 0xD800 + (((codePoint - 0x10000) |> Num.shiftRightBy 10) |> Num.bitwiseAnd 0x3FF)
+                        crash ""
+                        #    lowSurrogate = 0xDC00 + ((codePoint - 0x10000) |> Num.bitwiseAnd 0x3FF)
+                        #    state
+                        #    |> List.append (Num.toU16 highSurrogate)
+                        #    |> List.append (Num.toU16 lowSurrogate)
+                    else
+                        state
+                        |> List.append (Num.toU16 codePoint)
+
+                (_, _, _) -> crashInvalid 4
+
 Utf16Problem : []
 windowsToStr : List U16 -> Result Str [BadUtf16 Utf16Problem U64]
 utf8toUtf16 : U8 -> U16
@@ -55,8 +106,8 @@ unixToWindows : List U8 -> List U16
 ## expect Path.filename (Path.unix "foo/bar/") == Err IsDirPath
 ## expect Path.filename (Path.windows "foo\\bar\\") == Err IsDirPath
 ## expect Path.filename (Path.unix "foo/bar..") == Err EndsInDots
-## expect Path.filename (Path.unix "foo") == Ok "foo"
-## expect Path.filename (Path.unix "") == Ok ""
+## expect Path.filename (Path.unix "foo") == Ok (Path.unix "foo")
+## expect Path.filename (Path.unix "") == Ok (Path.unix "")
 ## ```
 filename : Path -> Result Path [IsDirPath, EndsInDots]
 filename = \@Path path ->
@@ -80,6 +131,14 @@ filename = \@Path path ->
                     when List.findLastIndex bytes (\u8 -> u8 == '/') is
                         Ok lastSepIndex -> Ok (@Path (Unix (afterSep bytes lastSepIndex)))
                         Err NotFound -> Ok (@Path path) # No separators? Entire path is the filename!
+
+expect Path.filename (Path.unix "foo/bar.txt") == Ok (Path.unix "bar.txt")
+expect Path.filename (Path.unix "foo/bar") == Ok (Path.unix "bar")
+expect Path.filename (Path.unix "foo/bar/") == Err IsDirPath
+expect Path.filename (Path.windows "foo\\bar\\") == Err IsDirPath
+expect Path.filename (Path.unix "foo/bar..") == Err EndsInDots
+expect Path.filename (Path.unix "foo") == Ok (Path.unix "foo")
+expect Path.filename (Path.unix "") == Ok (Path.unix "")
 
 afterSep : List (Num a), U64 -> List (Num a)
 afterSep = \list, lastSepIndex ->
@@ -118,7 +177,7 @@ filenameStr : Path -> Result Str [IsDirPath, EndsInDots, FilenameIsNotStr Path U
 ## expect Path.ext (Path.unix "foo/.bar.baz.txt") == Ok (Path.unix "baz.txt")
 ## expect Path.ext (Path.unix "foo/bar/") == Err IsDirPath
 ## expect Path.ext (Path.unix "foo/bar..") == Err EndsInDots
-## expect Path.ext (Path.unix "") == Ok ""
+## expect Path.ext (Path.unix "") == Ok (Path.unix "")
 ## ```
 ext : Path -> Result Path [IsDirPath, EndsInDots]
 
@@ -339,10 +398,10 @@ normalizeUnix = \answer, remaining ->
 ## To get back an `Err` instead of silently replacing problems with the Unicode Replacement Character,
 ## use [toStr] instead.
 display : Path -> Str
-display = \@Path path ->
-    when path is
-        Unix bytes -> crash "TODO fromUtf8Lossy"
-        Windows u16s -> crash "TODO fromUtf16Lossy"
+# display = \@Path path ->
+#    when path is
+#        Unix bytes -> crash "TODO fromUtf8Lossy"
+#        Windows u16s -> crash "TODO fromUtf16Lossy"
 
 ## Like [display], but renders the path Windows-style (with backslashes for directory separators)
 ## even if it was originally created as a UNIX path (e.g. using [Path.unix]).
