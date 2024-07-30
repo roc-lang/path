@@ -39,8 +39,6 @@ windows = \str -> @Path (Windows (strToUtf16 str))
 windowsU16s : List U16 -> Path
 windowsU16s = \list -> @Path (Windows list)
 
-# TODO these functions need to be available.
-# Could depend on roc/unicode, but they're so simple it's probably nicer for end users to inline them.
 strToUtf16 : Str -> List U16
 strToUtf16 = \str ->
     utf8 = Str.toUtf8 str
@@ -53,44 +51,59 @@ strToUtf16 = \str ->
         if b < 0x80 then
             state
             |> List.append (Num.toU16 b)
-            ## 2-byte sequence
-            # else if b < 0xE0 then
-            #    when (List.get utf8 (index + 1)) is
-            #        Ok nextByte ->
-            #            state
-            #            |> List.append (Num.toU16 (((b |> Num.bitwiseAnd 0x1F) |> Num.shiftLeftBy 6) |> Num.bitwiseOr (nextByte |> Num.bitwiseAnd 0x3F)))
-            #        Err NotFound -> crashInvalid 2
-            ## 3-byte sequence
-            # else if b < 0xF0 then
-            #    when (List.get utf8 (index + 1), List.get utf8 (index + 2)) is
-            #        (Ok nextByte1, Ok nextByte2) ->
-            #            state
-            #            |> List.append (Num.toU16 (((b |> Num.bitwiseAnd 0x0F) |> Num.shiftLeftBy 12) |> Num.bitwiseOr ((nextByte1 |> Num.bitwiseAnd 0x3F) |> Num.shiftLeftBy 6) |> Num.bitwiseOr (nextByte2 |> Num.bitwiseAnd 0x3F)))
-            #        (_, _) -> crashInvalid 3
-            # 4-byte sequence
+
+        # 2-byte sequence
+        else if b < 0xE0 then
+            when List.get utf8 (index + 1) is
+                Ok nextByte1 ->
+                    codePoint =
+                        (b |> Num.bitwiseAnd 0x1F |> Num.toU32 |> Num.shiftLeftBy 6)
+                        |> Num.bitwiseOr (nextByte1 |> Num.bitwiseAnd 0x3F |> Num.toU32)
+
+                    state
+                    |> List.append (Num.toU16 codePoint)
+
+                _ -> crashInvalid 2
+
+        # 3-byte sequence
+        else if b < 0xF0 then
+            when (List.get utf8 (index + 1), List.get utf8 (index + 2)) is
+                (Ok nextByte1, Ok nextByte2) ->
+                    codePoint =
+                        (b |> Num.bitwiseAnd 0x0F |> Num.toU32 |> Num.shiftLeftBy 12)
+                        |> Num.bitwiseOr ((nextByte1 |> Num.bitwiseAnd 0x3F) |> Num.toU32 |> Num.shiftLeftBy 6)
+                        |> Num.bitwiseOr (nextByte2 |> Num.bitwiseAnd 0x3F |> Num.toU32)
+
+                    state
+                    |> List.append (Num.toU16 codePoint)
+
+                (_, _) -> crashInvalid 3
+
+        # 4-byte sequence
         else
             when (List.get utf8 (index + 1), List.get utf8 (index + 2), List.get utf8 (index + 3)) is
                 (Ok nextByte1, Ok nextByte2, Ok nextByte3) ->
                     codePoint =
-                        (b |> Num.bitwiseAnd 0x07 |> Num.shiftLeftBy 18)
-                        |> Num.bitwiseOr ((nextByte1 |> Num.bitwiseAnd 0x3F) |> Num.shiftLeftBy 12)
-                        |> Num.bitwiseOr ((nextByte2 |> Num.bitwiseAnd 0x3F) |> Num.shiftLeftBy 6)
-                        |> Num.bitwiseOr (nextByte3 |> Num.bitwiseAnd 0x3F)
-                        |> Num.toU16
+                        (b |> Num.bitwiseAnd 0x07 |> Num.toU32 |> Num.shiftLeftBy 18)
+                        |> Num.bitwiseOr ((nextByte1 |> Num.bitwiseAnd 0x3F) |> Num.toU32 |> Num.shiftLeftBy 12)
+                        |> Num.bitwiseOr ((nextByte2 |> Num.bitwiseAnd 0x3F) |> Num.toU32 |> Num.shiftLeftBy 6)
+                        |> Num.bitwiseOr (nextByte3 |> Num.bitwiseAnd 0x3F |> Num.toU32)
 
                     if codePoint > 0xFFFF then
-                        highSurrogate = 0xD800 + (((codePoint - 0x1000) |> Num.shiftRightBy 10) |> Num.bitwiseAnd 0x3FF)
-                        crash ""
-                        #    lowSurrogate = 0xDC00 + ((codePoint - 0x10000) |> Num.bitwiseAnd 0x3FF)
-                        #    state
-                        #    |> List.append (Num.toU16 highSurrogate)
-                        #    |> List.append (Num.toU16 lowSurrogate)
+                        highSurrogate = 0xD800 + (((codePoint - 0x10000) |> Num.shiftRightBy 10) |> Num.bitwiseAnd 0x3FF)
+                        lowSurrogate = 0xDC00 + ((codePoint - 0x10000) |> Num.bitwiseAnd 0x3FF)
+
+                        state
+                        |> List.append (Num.toU16 highSurrogate)
+                        |> List.append (Num.toU16 lowSurrogate)
                     else
                         state
                         |> List.append (Num.toU16 codePoint)
 
                 (_, _, _) -> crashInvalid 4
 
+# TODO these functions need to be available.
+# Could depend on roc/unicode, but they're so simple it's probably nicer for end users to inline them.
 Utf16Problem : []
 windowsToStr : List U16 -> Result Str [BadUtf16 Utf16Problem U64]
 utf8toUtf16 : U8 -> U16
