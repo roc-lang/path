@@ -25,7 +25,10 @@ Path := [
     Unix (List U8),
     Windows (List U16),
 ]
-    implements [Eq]
+    implements [Eq, Inspect { toInspector: pathInspector }]
+
+pathInspector : Path -> Inspector f where f implements InspectFormatter
+pathInspector = \path -> Inspect.str (display path)
 
 unix : Str -> Path
 unix = \str -> @Path (Unix (Str.toUtf8 str))
@@ -406,15 +409,17 @@ normalizeUnix = \answer, remaining ->
             |> normalizeUnix (remaining |> List.dropFirst 1)
 
 ## Returns a string representation of the path, replacing anything that can't be
-## represented in a string with the Unicode Replacement Character.
+## represented in a string with the Unicode Replacement Character (U+FFFD) �.
 ##
 ## To get back an `Err` instead of silently replacing problems with the Unicode Replacement Character,
 ## use [toStr] instead.
 display : Path -> Str
-# display = \@Path path ->
-#    when path is
-#        Unix bytes -> crash "TODO fromUtf8Lossy"
-#        Windows u16s -> crash "TODO fromUtf16Lossy"
+display = \@Path path ->
+    when path is
+        Unix u8s ->
+            # TODO replace with Str.fromUtf8Lossy when it exists
+            Str.fromUtf8 u8s |> Result.withDefault "INVALID UTF-8"
+        Windows _u16s -> crash "TODO use fromUtf16Lossy"
 
 ## Like [display], but renders the path Windows-style (with backslashes for directory separators)
 ## even if it was originally created as a UNIX path (e.g. using [Path.unix]).
