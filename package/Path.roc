@@ -1,529 +1,342 @@
-
 expect Path.unix("abc") == Unix([97, 98, 99])
 expect Path.unix_bytes([97, 98, 99]) == Unix([97, 98, 99])
+expect Path.windows("abc") == Windows([97, 98, 99])
+expect Path.windows_u16s([97, 98, 99]) == Windows([97, 98, 99])
 
-# TODO: enable once str_to_utf16 is implemented
-# expect Path.windows("abc") == Windows([97, 0, 98, 0, 99, 0])
-expect Path.windows_u16s([97, 0, 98, 0, 99, 0]) == Windows([97, 0, 98, 0, 99, 0])
+expect Path.to_raw(Path.unix_bytes([97, 255, 98])) == UnixBytes([97, 255, 98])
+expect Path.from_raw(WindowsU16s([97, 98, 99])) == Path.windows("abc")
 
-# TODO port `implements [Eq]`
+expect Path.to_str(Path.unix("abc")) == Ok("abc")
+expect Path.to_str(Path.unix_bytes([97, 255, 98])) == Err(InvalidStr(1))
+expect Path.to_str(Path.windows("abc")) == Ok("abc")
+expect Path.to_str(Path.windows_u16s([0xD800])) == Err(InvalidStr(0))
+
+expect Path.to_str(Path.windows_u16s([0xD83D, 0xDC26])) == Ok(Str.from_utf8_lossy([0xF0, 0x9F, 0x90, 0xA6]))
+
+expect Path.display(Path.unix_bytes([97, 255, 98])) == Str.from_utf8_lossy([97, 255, 98])
+expect Path.display(Path.windows_u16s([0xD800, 97])) == Str.from_utf8_lossy([0xEF, 0xBF, 0xBD, 97])
+
+expect Path.filename(Path.unix("foo/bar.txt")) == Ok(Path.unix("bar.txt"))
+expect Path.filename(Path.unix("foo/bar")) == Ok(Path.unix("bar"))
+expect Path.filename(Path.unix("foo/bar/")) == Err(IsDirPath)
+expect Path.filename(Path.windows("foo\\bar\\")) == Err(IsDirPath)
+expect Path.filename(Path.unix("foo/bar..")) == Err(EndsInDots)
+expect Path.filename(Path.unix("foo")) == Ok(Path.unix("foo"))
+expect Path.filename(Path.unix("")) == Ok(Path.unix(""))
+
+expect Path.ext(Path.unix("foo/bar.txt")) == Ok(Path.unix("txt"))
+expect Path.ext(Path.unix("foo/bar.")) == Ok(Path.unix(""))
+expect Path.ext(Path.unix("foo/.bar.txt")) == Ok(Path.unix("txt"))
+expect Path.ext(Path.unix("foo/bar")) == Ok(Path.unix(""))
+expect Path.ext(Path.unix("foo/.bar")) == Ok(Path.unix(""))
+expect Path.ext(Path.unix("foo/bar.baz.txt")) == Ok(Path.unix("baz.txt"))
+expect Path.ext(Path.unix("foo/.bar.baz.txt")) == Ok(Path.unix("baz.txt"))
+expect Path.ext(Path.unix("foo/bar/")) == Err(IsDirPath)
+expect Path.ext(Path.unix("foo/bar..")) == Err(EndsInDots)
+expect Path.ext(Path.unix("")) == Ok(Path.unix(""))
+
+expect Path.join(Path.unix("foo"), "bar") == Path.unix("foo/bar")
+expect Path.join(Path.windows("foo"), "bar") == Path.windows("foo\\bar")
+
 Path :: [
-    Unix(List(U8)),
-    Windows(List(U16)),
+	Unix(List(U8)),
+	Windows(List(U16)),
 ].{
-    unix : Str -> Path
-    unix = |str| Unix(str.to_utf8())
 
-    unix_bytes : List(U8) -> Path
-    unix_bytes = |bytes| Unix(bytes)
-
-    windows : Str -> Path
-    windows = |str| Windows(str_to_utf16(str))
-
-    windows_u16s : List(U16) -> Path
-    windows_u16s = |list| Windows(list)
-
-    # TODO: continure once #9440 is merged
-    str_to_utf16 : Str -> List(U16)
-    str_to_utf16 = |_str| {[]}
-    # str_to_utf16 = |str| {
-    #     utf8_bytes = str.to_utf8()
-    #     len = utf8_bytes.len()
-    #     crash_invalid = |num_bytes| {
-    #         crash "A Str contained an invalid #{num_bytes}-byte UTF-8 sequence. This should never happen!"
-    #     }
-
-    #     utf8_bytes.fold_with_index(List.with_capacity(len), |state, byte, index| {
-    #         # 1-byte (ASCII) code unit
-    #         if byte < 0x80 {
-    #             state.append(byte.to_u16())
-    #         }
-    #         # 2-byte sequence
-    #         else if byte < 0xE0 {
-    #             match utf8_bytes.get(index + 1) {
-    #                 Ok(next_byte1) => {
-    #                     code_point =
-    #                         ((byte & 0x1F).to_u32() << 6) | ((next_byte1 & 0x3F).to_u32())
-
-    #                     state.append(code_point.to_u16())
-    #                 }
-    #                 _ => crash_invalid(2),
-    #             }
-    #         }
-    #         # 3-byte sequence
-    #         else if byte < 0xF0 {
-    #             when (utf8_bytes.get(index + 1), utf8_bytes.get(index + 2)) {
-    #                 (Ok(next_byte1), Ok(next_byte2)) => {
-    #                     code_point =
-    #                         ((byte & 0x0F).to_u32() << 12)
-    #                             | (((next_byte1 & 0x3F).to_u32()) << 6)
-    #                             | ((next_byte2 & 0x3F).to_u32())
-
-    #                     state.append(code_point.to_u16())
-    #                 }
-    #                 (_, _) => crash_invalid(3),
-    #             }
-    #         }
-    #         # 4-byte sequence
-    #         else {
-    #             when (
-    #                 utf8_bytes.get(index + 1),
-    #                 utf8_bytes.get(index + 2),
-    #                 utf8_bytes.get(index + 3)
-    #             ) {
-    #                 (Ok(next_byte1), Ok(next_byte2), Ok(next_byte3)) => {
-    #                     code_point =
-    #                         ((byte & 0x07).to_u32() << 18)
-    #                             | (((next_byte1 & 0x3F).to_u32()) << 12)
-    #                             | (((next_byte2 & 0x3F).to_u32()) << 6)
-    #                             | ((next_byte3 & 0x3F).to_u32())
-
-    #                     if code_point > 0xFFFF {
-    #                         high_surrogate = (0xD800 + (((code_point - 0x10000) >> 10) & 0x3FF)).to_u16()
-    #                         low_surrogate = (0xDC00 + ((code_point - 0x10000) & 0x3FF)).to_u16()
-
-
-    # }
-
-    # windows : Str -> Path
-    # windows = \str -> @Path (Windows (strToUtf16 str))
-
-    # windowsU16s : List U16 -> Path
-    # windowsU16s = \list -> @Path (Windows list)
-
-    # strToUtf16 : Str -> List U16
-    # strToUtf16 = \str ->
-    #     utf8 = Str.toUtf8 str
-    #     len = List.len utf8
-    #     crashInvalid = \numBytes ->
-    #         crash "A Str contained an invalid $(Num.toStr numBytes)-byte UTF-8 sequence. This should never happen!"
-
-    #     List.walkWithIndex utf8 (List.withCapacity len) \state, b, index ->
-    #         ## 1-byte (ASCII) code unit
-    #         if b < 0x80 then
-    #             state
-    #             |> List.append (Num.toU16 b)
-
-    #         # 2-byte sequence
-    #         else if b < 0xE0 then
-    #             when List.get utf8 (index + 1) is
-    #                 Ok nextByte1 ->
-    #                     codePoint =
-    #                         (b |> Num.bitwiseAnd 0x1F |> Num.toU32 |> Num.shiftLeftBy 6)
-    #                         |> Num.bitwiseOr (nextByte1 |> Num.bitwiseAnd 0x3F |> Num.toU32)
-
-    #                     state
-    #                     |> List.append (Num.toU16 codePoint)
-
-    #                 _ -> crashInvalid 2
-
-    #         # 3-byte sequence
-    #         else if b < 0xF0 then
-    #             when (List.get utf8 (index + 1), List.get utf8 (index + 2)) is
-    #                 (Ok nextByte1, Ok nextByte2) ->
-    #                     codePoint =
-    #                         (b |> Num.bitwiseAnd 0x0F |> Num.toU32 |> Num.shiftLeftBy 12)
-    #                         |> Num.bitwiseOr ((nextByte1 |> Num.bitwiseAnd 0x3F) |> Num.toU32 |> Num.shiftLeftBy 6)
-    #                         |> Num.bitwiseOr (nextByte2 |> Num.bitwiseAnd 0x3F |> Num.toU32)
-
-    #                     state
-    #                     |> List.append (Num.toU16 codePoint)
-
-    #                 (_, _) -> crashInvalid 3
-
-    #         # 4-byte sequence
-    #         else
-    #             when (List.get utf8 (index + 1), List.get utf8 (index + 2), List.get utf8 (index + 3)) is
-    #                 (Ok nextByte1, Ok nextByte2, Ok nextByte3) ->
-    #                     codePoint =
-    #                         (b |> Num.bitwiseAnd 0x07 |> Num.toU32 |> Num.shiftLeftBy 18)
-    #                         |> Num.bitwiseOr ((nextByte1 |> Num.bitwiseAnd 0x3F) |> Num.toU32 |> Num.shiftLeftBy 12)
-    #                         |> Num.bitwiseOr ((nextByte2 |> Num.bitwiseAnd 0x3F) |> Num.toU32 |> Num.shiftLeftBy 6)
-    #                         |> Num.bitwiseOr (nextByte3 |> Num.bitwiseAnd 0x3F |> Num.toU32)
-
-    #                     if codePoint > 0xFFFF then
-    #                         highSurrogate = 0xD800 + (((codePoint - 0x10000) |> Num.shiftRightBy 10) |> Num.bitwiseAnd 0x3FF)
-    #                         lowSurrogate = 0xDC00 + ((codePoint - 0x10000) |> Num.bitwiseAnd 0x3FF)
-
-    #                         state
-    #                         |> List.append (Num.toU16 highSurrogate)
-    #                         |> List.append (Num.toU16 lowSurrogate)
-    #                     else
-    #                         state
-    #                         |> List.append (Num.toU16 codePoint)
-
-    #                 (_, _, _) -> crashInvalid 4
-
-    # # TODO these functions need to be available.
-    # # Could depend on roc/unicode, but they're so simple it's probably nicer for end users to inline them.
-    # Utf16Problem : []
-    # windowsToStr : List U16 -> Result Str [BadUtf16 Utf16Problem U64]
-    # utf8toUtf16 : U8 -> U16
-    # windowsToUnix : List U16 -> List U8
-    # unixToWindows : List U8 -> List U16
-
-    # ## Returns everything after the last directory separator in the path. Returns `Err` if the path
-    # ## ends in `..` or in a directory separator.
-    # ##
-    # ## ```roc
-    # ## expect Path.filename (Path.unix "foo/bar.txt") == Ok (Path.unix "bar.txt")
-    # ## expect Path.filename (Path.unix "foo/bar") == Ok (Path.unix "bar")
-    # ## expect Path.filename (Path.unix "foo/bar/") == Err IsDirPath
-    # ## expect Path.filename (Path.windows "foo\\bar\\") == Err IsDirPath
-    # ## expect Path.filename (Path.unix "foo/bar..") == Err EndsInDots
-    # ## expect Path.filename (Path.unix "foo") == Ok (Path.unix "foo")
-    # ## expect Path.filename (Path.unix "") == Ok (Path.unix "")
-    # ## ```
-    # filename : Path -> Result Path [IsDirPath, EndsInDots]
-    # filename = \@Path path ->
-    #     when path is
-    #         Windows u16s ->
-    #             when u16s is
-    #                 [.., '/'] -> Err IsDirPath
-    #                 [.., '\\'] -> Err IsDirPath
-    #                 [.., '.', '.'] -> Err EndsInDots
-    #                 _ ->
-    #                     when List.findLastIndex u16s (\u16 -> u16 == '/' || u16 == '\\') is
-    #                         Ok lastSepIndex -> Ok (@Path (Windows (afterSep u16s lastSepIndex)))
-    #                         Err NotFound -> Ok (@Path path) # No separators? Entire path is the filename!
-
-    #         Unix bytes ->
-    #             when bytes is
-    #                 [.., '/'] -> Err IsDirPath
-    #                 # Note that backslashes are *not* directory separators in UNIX
-    #                 [.., '.', '.'] -> Err EndsInDots
-    #                 _ ->
-    #                     when List.findLastIndex bytes (\u8 -> u8 == '/') is
-    #                         Ok lastSepIndex -> Ok (@Path (Unix (afterSep bytes lastSepIndex)))
-    #                         Err NotFound -> Ok (@Path path) # No separators? Entire path is the filename!
-
-    # expect Path.filename (Path.unix "foo/bar.txt") == Ok (Path.unix "bar.txt")
-    # expect Path.filename (Path.unix "foo/bar") == Ok (Path.unix "bar")
-    # expect Path.filename (Path.unix "foo/bar/") == Err IsDirPath
-    # expect Path.filename (Path.windows "foo\\bar\\") == Err IsDirPath
-    # expect Path.filename (Path.unix "foo/bar..") == Err EndsInDots
-    # expect Path.filename (Path.unix "foo") == Ok (Path.unix "foo")
-    # expect Path.filename (Path.unix "") == Ok (Path.unix "")
-
-    # afterSep : List (Num a), U64 -> List (Num a)
-    # afterSep = \list, lastSepIndex ->
-    #     # Return everything after the separator. Example:
-    #     #
-    #     # "foo/bar.txt"
-    #     #     len = 11
-    #     #     lastSepIndex = 3
-    #     #     start = 4
-    #     #     len - start = 11 - 4 = 7
-    #     start = lastSepIndex |> Num.addWrap 1
-    #     len = List.len list |> Num.subWrap start
-
-    #     List.sublist list { start, len }
-
-    # ## Like [filename], except converts the resulting path to a [Str] using [toStr].
-    # filenameStr : Path -> Result Str [IsDirPath, EndsInDots, FilenameIsNotStr Path U64]
-
-    # ## The extension is considered to be everything following the first dot in the filename,
-    # ## unless the filename begins with a dot - in which case it's everything following the
-    # ## second dot in the filename.
-    # ##
-    # ## * If the filename has only one dot, and it's at the end of the filename, returns `Ok` with an empty [Path].
-    # ## * If the filename is empty, returns `Ok` with an empty [Path].
-    # ## * If the filename ends in a slash, returns `Err` because this path refers to a directory, and directories don't have file extensions.'
-    # ## * If the filename ends in multiple dots, returns `Err` because the extension can't be known without resolving the `..` first.
-    # ##
-    # ## ```roc
-    # ## expect Path.ext (Path.unix "foo/bar.txt") == Ok (Path.unix "txt")
-    # ## expect Path.ext (Path.unix "foo/bar.") == Ok (Path.unix "")
-    # ## expect Path.ext (Path.unix "foo/.bar.txt") == Ok (Path.unix "txt")
-    # ## expect Path.ext (Path.unix "foo/bar.") == Ok (Path.unix "")
-    # ## expect Path.ext (Path.unix "foo/bar") == Ok (Path.unix "")
-    # ## expect Path.ext (Path.unix "foo/.bar") == Ok (Path.unix "")
-    # ## expect Path.ext (Path.unix "foo/bar.baz.txt") == Ok (Path.unix "baz.txt")
-    # ## expect Path.ext (Path.unix "foo/.bar.baz.txt") == Ok (Path.unix "baz.txt")
-    # ## expect Path.ext (Path.unix "foo/bar/") == Err IsDirPath
-    # ## expect Path.ext (Path.unix "foo/bar..") == Err EndsInDots
-    # ## expect Path.ext (Path.unix "") == Ok (Path.unix "")
-    # ## ```
-    # ext : Path -> Result Path [IsDirPath, EndsInDots]
-
-    # ## Like [ext], except converts the resulting path to a [Str] using [toStr].
-    # extStr : Path -> Result Str [IsDirPath, EndsInDots, ExtIsNotStr Path U64]
-
-    # ## Adds a file separator followed by the given string.
-    # ##
-    # ## The file separator will be either a slash or backslash, depending on how this [Path]
-    # ## was created. If the path was created using [Path.unix], the separator will be a slash.
-    # ## If it was created using [Path.windows], it will be a backslash.
-    # join : Path, Str -> Path
-    # join = \@Path path, str ->
-    #     when path is
-    #         Windows u16s ->
-    #             suffix = strToUtf16 str
-
-    #             u16s
-    #             |> List.reserve (1 + List.len suffix)
-    #             |> List.append (utf8toUtf16 '/')
-    #             |> List.concat suffix
-    #             |> Windows
-    #             |> @Path
-
-    #         Unix bytes ->
-    #             suffix = Str.toUtf8 str
-
-    #             bytes
-    #             |> List.reserve (1 + List.len suffix)
-    #             |> List.append '/'
-    #             |> List.concat suffix
-    #             |> Unix
-    #             |> @Path
-
-    # concat : Path, Path -> Path
-    # concat = \@Path p1, @Path p2 ->
-    #     when (p1, p2) is
-    #         (Windows list1, Windows list2) -> windowsU16s (List.concat list1 list2)
-    #         (Unix list1, Unix list2) -> unixBytes (List.concat list1 list2)
-    #         (Windows list1, Unix list2) -> windowsU16s (List.concat list1 (unixToWindows list2))
-    #         (Unix list1, Windows list2) -> unixBytes (List.concat list1 (windowsToUnix list2))
-
-    # ## Normalizes the path by simplifying redundant parts.
-    # ##
-    # ## If the path was created with [Path.unix], this does the following:
-    # ## 1. Replaces `foo/bar/../baz/` with `foo/baz/` (and does the same with `\` on Windows).
-    # ## 2. Replaces `foo/./bar/` with `foo/bar/` (and does the same with `\` on Windows).
-    # ## 3. Replaces repeated path separators (e.g. `//`) with one path separator.
-    # ## 4. If the path contains any `"\u(0)"`s, ends the path before the first one. (See [fromRaw] for why this would be helpful.)
-    # ##
-    # ## If the path was created with [Path.windows], this does the same thing except that it considers `/`
-    # ## and `\` to be equivalent (since Windows considers both to be directory separators), and normalizes
-    # ## all directory separators to `\`s in the returned path.
-    # ##
-    # ## Note that operating systems generally do not normalize symlinks, which means that normalizing a path
-    # ## can change program behavior! For example, if there is a symlink in the operating system which
-    # ## contains two consecitive file separators, then normalizing could mean that a path which previously
-    # ## would have resolved using that symlink will no longer involve the symlink.
-    # ##
-    # ## The process of normalizing while also resolving symlinks is known as *canonicalization*. Operating
-    # ## systems already canonicalize paths automatically before operating on them, so typically the only
-    # ## reason to explicitly canonicalize them in a program is to display or record the canonicalized path.
-    # ## Canonicalizing paths is out of scope for this module, because it requires a [Task] that talks to
-    # ## the operating system (symlinks can change on disk in the middle of a running program, so there's
-    # ## no way to get a canonicalized path besides asking the OS for it), and this module is designed not
-    # ## to depend on talking to the operating system.
-    # normalize : Path -> Path
-    # normalize = \@Path path ->
-    #     when path is
-    #         Windows u16s ->
-    #             List.withCapacity (List.len u16s)
-    #             |> normalizeWindows u16s
-    #             |> Windows
-    #             |> @Path
-
-    #         Unix bytes ->
-    #             List.withCapacity (List.len bytes)
-    #             |> normalizeUnix bytes
-    #             |> Unix
-    #             |> @Path
-
-    # normalizeWindows : List U16, List U16 -> List U16
-    # normalizeWindows = \answer, remaining ->
-    #     when remaining is
-    #         ['/', '/', ..] | ['/', '\\', ..] | ['\\', '/', ..] | ['\\', '\\', ..] ->
-    #             if List.isEmpty answer then
-    #                 # At the very beginning of a Windows path, two backslashes
-    #                 # (either of which could be slashes instead) means a UNC Path
-    #                 # and should be preserved. See https://learn.microsoft.com/en-us/dotnet/standard/io/file-path-formats#unc-paths
-    #                 answer
-    #                 |> List.append '\\'
-    #                 |> List.append '\\'
-    #                 |> normalizeWindows (remaining |> List.dropFirst 2)
-    #             else
-    #                 # Collapse other consecutive separators into one backslash.
-    #                 answer
-    #                 |> List.append '\\'
-    #                 |> normalizeWindows (remaining |> List.dropFirst 2)
-
-    #         ['/', '.', '/', ..] | ['/', '.', '\\', ..] | ['\\', '.', '/', ..] | ['\\', '.', '\\', ..] ->
-    #             # Normalize separator-dot-separator into one backslash.
-    #             answer
-    #             |> List.append '\\'
-    #             |> normalizeWindows remaining
-
-    #         ['/', '.', '.', '/', ..] | ['\\', '.', '.', '/', ..] | ['/', '.', '.', '\\', ..] | ['\\', '.', '.', '\\', ..] ->
-    #             # "/../" means we should delete the component we most recently added.
-    #             when List.findLastIndex answer (\u16 -> u16 == '/' || u16 == '\\') is
-    #                 Ok lastSepIndex ->
-    #                     lenToDelete = List.len answer |> Num.subWrap lastSepIndex
-
-    #                     # Example:
-    #                     #     "foo/things"
-    #                     #     lastSepIndex = 3
-    #                     #     lenToDelete = 10 - 3 = 7
-    #                     #     |> List.dropLast 7 yields "foo" as desired
-
-    #                     answer
-    #                     |> List.dropLast lenToDelete
-    #                     |> List.append '\\' # replace the "/../" with one backslash
-    #                     |> normalizeWindows (remaining |> List.dropFirst 4)
-
-    #                 Err NotFound ->
-    #                     # There are no separators in the answer we've accumulated so far.
-    #                     if List.isEmpty answer then
-    #                         # If the answer was empty (e.g. the whole input path begins with "/../"),
-    #                         # then the input path was invalid, and we leave it alone. (We don't want to
-    #                         # have normalize change an invalid path to a different and potentially valid
-    #                         # one!) It's fine if the path itself begins with "../" - so don't change that.
-    #                         answer
-    #                         |> List.concat ['\\', '.', '.', '\\']
-    #                         |> normalizeWindows (remaining |> List.dropFirst 4)
-    #                     else
-    #                         # If the path was nonempty, then we eliminate everything up to this point -
-    #                         # e.g. normalizing `foo/../bar` to `bar`
-    #                         answer # TODO this comment should appear on the next line; formatter bug!
-    #                         # Drop all the elements instead of starting over with empty list,
-    #                         # in order to keep the capacity we already reserved on the heap.
-    #                         |> List.dropFirst (List.len answer)
-    #                         |> normalizeWindows (remaining |> List.dropFirst 4)
-
-    #         [0, ..] | [] ->
-    #             # If we encounter a zero, we're immediately done. Drop the zero and everything after it!
-    #             # We're also done if we ran out of remaining elements to process.
-    #             answer
-
-    #         [next, ..] ->
-    #             # This element is unremarkable; copy it into the answer and keep moving
-    #             answer
-    #             |> List.append next
-    #             |> normalizeWindows (remaining |> List.dropFirst 1)
-
-    # normalizeUnix : List U8, List U8 -> List U8
-    # normalizeUnix = \answer, remaining ->
-    #     when remaining is
-    #         ['/', '/', ..] ->
-    #             # Collapse consecutive separators into one slash.
-    #             answer
-    #             |> List.append '/'
-    #             |> normalizeUnix (remaining |> List.dropFirst 2)
-
-    #         ['/', '.', '/', ..] ->
-    #             # Normalize separator-dot-separator into one backslash.
-    #             answer
-    #             |> List.append '\\'
-    #             |> normalizeUnix remaining
-
-    #         ['/', '.', '.', '/', ..] ->
-    #             # "/../" means we should delete the component we most recently added.
-    #             when List.findLastIndex answer (\byte -> byte == '/') is
-    #                 Ok lastSepIndex ->
-    #                     lenToDelete = List.len answer |> Num.subWrap lastSepIndex
-
-    #                     # Example:
-    #                     #     "foo/things"
-    #                     #     lastSepIndex = 3
-    #                     #     lenToDelete = 10 - 3 = 7
-    #                     #     |> List.dropLast 7 yields "foo" as desired
-
-    #                     answer
-    #                     |> List.dropLast lenToDelete
-    #                     |> List.append '/' # replace the "/../" with one slash
-    #                     |> normalizeUnix (remaining |> List.dropFirst 4)
-
-    #                 Err NotFound ->
-    #                     # There are no separators in the answer we've accumulated so far.
-    #                     if List.isEmpty answer then
-    #                         # If the answer was empty (e.g. the whole input path begins with "/../"),
-    #                         # then the input path was invalid, and we leave it alone. (We don't want to
-    #                         # have normalize change an invalid path to a different and potentially valid
-    #                         # one!) It's fine if the path itself begins with "../" - so don't change that.
-    #                         answer
-    #                         |> List.concat ['/', '.', '.', '/']
-    #                         |> normalizeUnix (remaining |> List.dropFirst 4)
-    #                     else
-    #                         # If the path was nonempty, then we eliminate everything up to this point -
-    #                         # e.g. normalizing `foo/../bar` to `bar`
-    #                         answer # TODO this comment should appear on the next line; formatter bug!
-    #                         # Drop all the elements instead of starting over with empty list,
-    #                         # in order to keep the capacity we already reserved on the heap.
-    #                         |> List.dropFirst (List.len answer)
-    #                         |> normalizeUnix (remaining |> List.dropFirst 4)
-
-    #         [0, ..] | [] ->
-    #             # If we encounter a zero, we're immediately done. Drop the zero and everything after it!
-    #             # We're also done if we ran out of remaining elements to process.
-    #             answer
-
-    #         [next, ..] ->
-    #             # This element is unremarkable; copy it into the answer and keep moving
-    #             answer
-    #             |> List.append next
-    #             |> normalizeUnix (remaining |> List.dropFirst 1)
-
-    # ## Returns a string representation of the path, replacing anything that can't be
-    # ## represented in a string with the Unicode Replacement Character.
-    # ##
-    # ## To get back an `Err` instead of silently replacing problems with the Unicode Replacement Character,
-    # ## use [toStr] instead.
-    # display : Path -> Str
-    # # display = \@Path path ->
-    # #    when path is
-    # #        Unix bytes -> crash "TODO fromUtf8Lossy"
-    # #        Windows u16s -> crash "TODO fromUtf16Lossy"
-
-    # ## Like [display], but renders the path Windows-style (with backslashes for directory separators)
-    # ## even if it was originally created as a UNIX path (e.g. using [Path.unix]).
-    # displayWindows : Path -> Str
-
-    # ## Like [display], but renders the path UNIX-style (with slashes for directory separators)
-    # ## even if it was originally created as a Windows path (e.g. using [Path.windows]).
-    # displayUnix : Path -> Str
-
-    # ## If any content is encountered that can't be converted to a [Str],
-    # ## returns the index into the underlying [List] of data (which can be obtained
-    # ## from the [Path] using [toRaw]) where that content was encountered.
-    # toStr : Path -> Result Str [InvalidStr U64]
-    # toStr = \@Path path ->
-    #     when path is
-    #         Windows u16s ->
-    #             windowsToStr u16s
-    #             |> Result.mapErr \BadUtf16 _ index -> InvalidStr index
-
-    #         Unix bytes ->
-    #             Str.fromUtf8 bytes
-    #             |> Result.mapErr \BadUtf8 _ index -> InvalidStr index
-
-    # ## Like [toStr], but renders the path Windows-style (with backslashes for directory separators)
-    # ## even if it was originally created as a UNIX path (e.g. using [Path.unix]).
-    # toStrWindows : Path -> Result Str [InvalidStr U64]
-
-    # ## Like [display], but renders the path UNIX-style (with slashes for directory separators)
-    # ## even if it was originally created as a Windows path (e.g. using [Path.windows]).
-    # toStrUnix : Path -> Result Str [InvalidStr U64]
-
-    # ## Converts the given [Path] to either a [List U8] (if the path was created
-    # ## using [Path.unix]) or a [List U16] (if the path was created with [Path.windows]).
-    # toRaw : Path -> [Windows (List U16), Unix (List U8)]
-    # toRaw = \@Path path -> path
-
-    # ## Takes the output of a [toRaw] call and returns a [Path].
-    # ##
-    # ## This function is most often called by platforms, passing values that were received
-    # ## directly from the operating system. To maximize performance, no validation is performed
-    # ## on the provided lists. Here are some ways the lists can be invalid, and what
-    # ## the consequences will be if they are:
-    # ##
-    # ## * If a `Windows` list contains any numbers beween 1 and 31, then the path is not a valid Windows path. All the operations in this `Path` module will work as normal (e.g. [ext], [display], etc.), but if you try to use the path with any operation system functions (like reading a file from disk), Windows will give an error.
-    # ## * If either a `Windows` or `Unix` list contains any zeroes, then the operating system will ignore the zero as well as everything that comes after it. (Once again, all the operations in this `Path` module will work as normal.)
-    # ##
-    # ## The reason this function does not perform validation is that it will almost always
-    # ## be called by platforms, passing lists that are definitely valid because they came directly from
-    # ## the operating system. For example, when returning the contents of a (maybe very large) directory,
-    # ## a validation function would have to spend time verifying each of those entries, even though it
-    # ## would always pass.
-    # ##
-    # ## In the unusual situation where this function isn't being called by a platform,
-    # ## accidentally passing invalid lists is possible, but it's an unlikely mistake to make.
-    # fromRaw : [Windows (List U16), Unix (List U8)] -> Path
-    # fromRaw = \raw -> @Path raw
+	## Create a Unix path from a Roc string by storing its UTF-8 bytes.
+	unix : Str -> Path
+	unix = |str| Unix(Str.to_utf8(str))
+
+	## Create a Unix path from raw bytes without validating UTF-8.
+	unix_bytes : List(U8) -> Path
+	unix_bytes = |bytes| Unix(bytes)
+
+	## Create a Windows path from a Roc string by storing its UTF-16 code units.
+	windows : Str -> Path
+	windows = |str| Windows(str_to_utf16(str))
+
+	## Create a Windows path from raw UTF-16 code units.
+	windows_u16s : List(U16) -> Path
+	windows_u16s = |list| Windows(list)
+
+	## Convert a path to a string if its raw representation is valid text.
+	to_str : Path -> Try(Str, [InvalidStr(U64)])
+	to_str = |path|
+		match path {
+			Unix(bytes) =>
+				match Str.from_utf8(bytes) {
+					Ok(str) => Ok(str)
+					Err(BadUtf8({ index, problem: _ })) => Err(InvalidStr(index))
+				}
+
+			Windows(u16s) => utf16_to_str(u16s)
+		}
+
+	## Convert a path to a display string, replacing invalid text with U+FFFD.
+	display : Path -> Str
+	display = |path|
+		match path {
+			Unix(bytes) => Str.from_utf8_lossy(bytes)
+			Windows(u16s) => Str.from_utf8_lossy(utf16_to_utf8_lossy(u16s))
+		}
+
+	## Returns everything after the last directory separator.
+	filename : Path -> Try(Path, [IsDirPath, EndsInDots])
+	filename = |path|
+		match path {
+			Unix(bytes) =>
+				if ends_with_u8(bytes, '/') {
+					Err(IsDirPath)
+				} else if ends_with_two_u8(bytes, '.', '.') {
+					Err(EndsInDots)
+				} else {
+					match List.find_last_index(bytes, |byte| byte == '/') {
+						Ok(last_sep_index) => Ok(Unix(after_index_u8(bytes, last_sep_index)))
+						Err(NotFound) => Ok(path)
+					}
+				}
+
+			Windows(u16s) =>
+				if ends_with_u16(u16s, '/') or ends_with_u16(u16s, '\\') {
+					Err(IsDirPath)
+				} else if ends_with_two_u16(u16s, '.', '.') {
+					Err(EndsInDots)
+				} else {
+					match List.find_last_index(u16s, |u16| u16 == '/' or u16 == '\\') {
+						Ok(last_sep_index) => Ok(Windows(after_index_u16(u16s, last_sep_index)))
+						Err(NotFound) => Ok(path)
+					}
+				}
+			}
+
+	## Returns the filename extension without the leading dot.
+	ext : Path -> Try(Path, [IsDirPath, EndsInDots])
+	ext = |path|
+		match filename(path) {
+			Err(err) => Err(err)
+			Ok(Unix(bytes)) => Ok(Unix(ext_units_u8(bytes)))
+			Ok(Windows(u16s)) => Ok(Windows(ext_units_u16(u16s)))
+		}
+
+	## Adds a separator and a string component to the path.
+	join : Path, Str -> Path
+	join = |path, str|
+		match path {
+			Unix(bytes) => Unix(bytes.append('/').concat(Str.to_utf8(str)))
+			Windows(u16s) => Windows(u16s.append('\\').concat(str_to_utf16(str)))
+		}
+
+	## Expose the raw OS-specific representation.
+	to_raw : Path -> [UnixBytes(List(U8)), WindowsU16s(List(U16))]
+	to_raw = |path|
+		match path {
+			Unix(bytes) => UnixBytes(bytes)
+			Windows(u16s) => WindowsU16s(u16s)
+		}
+
+	## Build a path from the raw OS-specific representation.
+	from_raw : [UnixBytes(List(U8)), WindowsU16s(List(U16))] -> Path
+	from_raw = |raw|
+		match raw {
+			UnixBytes(bytes) => Unix(bytes)
+			WindowsU16s(u16s) => Windows(u16s)
+		}
 }
 
+str_to_utf16 : Str -> List(U16)
+str_to_utf16 = |str| utf8_to_utf16(Str.to_utf8(str), [])
 
+utf8_to_utf16 : List(U8), List(U16) -> List(U16)
+utf8_to_utf16 = |remaining, out|
+	match remaining {
+		[] => out
 
+		[byte, .. as rest] if byte < 0x80 =>
+			utf8_to_utf16(rest, out.append(U8.to_u16(byte)))
+
+		[byte1, byte2, .. as rest] if byte1 < 0xE0 => {
+			top = U32.shift_left_by(U8.to_u32(U8.bitwise_and(byte1, 0x1F)), 6)
+			bottom = U8.to_u32(U8.bitwise_and(byte2, 0x3F))
+			code_point = U32.bitwise_or(top, bottom)
+
+			utf8_to_utf16(rest, out.append(U32.to_u16_wrap(code_point)))
+		}
+
+		[byte1, byte2, byte3, .. as rest] if byte1 < 0xF0 => {
+			top = U32.shift_left_by(U8.to_u32(U8.bitwise_and(byte1, 0x0F)), 12)
+			middle = U32.shift_left_by(U8.to_u32(U8.bitwise_and(byte2, 0x3F)), 6)
+			bottom = U8.to_u32(U8.bitwise_and(byte3, 0x3F))
+			code_point = U32.bitwise_or(U32.bitwise_or(top, middle), bottom)
+
+			utf8_to_utf16(rest, out.append(U32.to_u16_wrap(code_point)))
+		}
+
+		[byte1, byte2, byte3, byte4, .. as rest] => {
+			top = U32.shift_left_by(U8.to_u32(U8.bitwise_and(byte1, 0x07)), 18)
+			middle1 = U32.shift_left_by(U8.to_u32(U8.bitwise_and(byte2, 0x3F)), 12)
+			middle2 = U32.shift_left_by(U8.to_u32(U8.bitwise_and(byte3, 0x3F)), 6)
+			bottom = U8.to_u32(U8.bitwise_and(byte4, 0x3F))
+			upper = U32.bitwise_or(U32.bitwise_or(top, middle1), middle2)
+			code_point = U32.bitwise_or(upper, bottom)
+
+			high = U32.to_u16_wrap(0xD800 + U32.shift_right_by(code_point - 0x10000, 10))
+			low = U32.to_u16_wrap(0xDC00 + U32.bitwise_and(code_point - 0x10000, 0x3FF))
+
+			utf8_to_utf16(rest, out.append(high).append(low))
+		}
+
+		_ => {
+			crash "A Str contained invalid UTF-8. This should never happen."
+		}
+	}
+
+utf16_to_str : List(U16) -> Try(Str, [InvalidStr(U64)])
+utf16_to_str = |u16s|
+	match utf16_to_utf8(u16s, [], 0) {
+		Ok(bytes) =>
+			match Str.from_utf8(bytes) {
+				Ok(str) => Ok(str)
+				Err(BadUtf8({ index, problem: _ })) => Err(InvalidStr(index))
+			}
+
+		Err(InvalidUtf16(index)) => Err(InvalidStr(index))
+	}
+
+utf16_to_utf8 : List(U16), List(U8), U64 -> Try(List(U8), [InvalidUtf16(U64)])
+utf16_to_utf8 = |remaining, out, index|
+	match remaining {
+		[] => Ok(out)
+
+		[high, low, .. as rest] if is_high_surrogate(high) and is_low_surrogate(low) => {
+			high_bits = U32.shift_left_by(U16.to_u32(high) - 0xD800, 10)
+			low_bits = U16.to_u32(low) - 0xDC00
+			code_point = 0x10000 + high_bits + low_bits
+
+			utf16_to_utf8(rest, append_code_point_utf8(out, code_point), index + 2)
+		}
+
+		[unit, ..] if is_surrogate(unit) => Err(InvalidUtf16(index))
+
+		[unit, .. as rest] =>
+			utf16_to_utf8(rest, append_code_point_utf8(out, U16.to_u32(unit)), index + 1)
+		}
+
+utf16_to_utf8_lossy : List(U16) -> List(U8)
+utf16_to_utf8_lossy = |u16s| utf16_to_utf8_lossy_help(u16s, [])
+
+utf16_to_utf8_lossy_help : List(U16), List(U8) -> List(U8)
+utf16_to_utf8_lossy_help = |remaining, out|
+	match remaining {
+		[] => out
+
+		[high, low, .. as rest] if is_high_surrogate(high) and is_low_surrogate(low) => {
+			high_bits = U32.shift_left_by(U16.to_u32(high) - 0xD800, 10)
+			low_bits = U16.to_u32(low) - 0xDC00
+			code_point = 0x10000 + high_bits + low_bits
+
+			utf16_to_utf8_lossy_help(rest, append_code_point_utf8(out, code_point))
+		}
+
+		[unit, .. as rest] if is_surrogate(unit) =>
+			utf16_to_utf8_lossy_help(rest, append_code_point_utf8(out, 0xFFFD))
+
+		[unit, .. as rest] =>
+			utf16_to_utf8_lossy_help(rest, append_code_point_utf8(out, U16.to_u32(unit)))
+		}
+
+append_code_point_utf8 : List(U8), U32 -> List(U8)
+append_code_point_utf8 = |out, code_point|
+	if code_point < 0x80 {
+		out.append(U32.to_u8_wrap(code_point))
+	} else if code_point < 0x800 {
+		out.append(U32.to_u8_wrap(0xC0 + U32.shift_right_by(code_point, 6)))
+			.append(U32.to_u8_wrap(0x80 + U32.bitwise_and(code_point, 0x3F)))
+	} else if code_point < 0x10000 {
+		out.append(U32.to_u8_wrap(0xE0 + U32.shift_right_by(code_point, 12)))
+			.append(U32.to_u8_wrap(0x80 + U32.bitwise_and(U32.shift_right_by(code_point, 6), 0x3F)))
+			.append(U32.to_u8_wrap(0x80 + U32.bitwise_and(code_point, 0x3F)))
+	} else {
+		out.append(U32.to_u8_wrap(0xF0 + U32.shift_right_by(code_point, 18)))
+			.append(U32.to_u8_wrap(0x80 + U32.bitwise_and(U32.shift_right_by(code_point, 12), 0x3F)))
+			.append(U32.to_u8_wrap(0x80 + U32.bitwise_and(U32.shift_right_by(code_point, 6), 0x3F)))
+			.append(U32.to_u8_wrap(0x80 + U32.bitwise_and(code_point, 0x3F)))
+	}
+
+is_high_surrogate : U16 -> Bool
+is_high_surrogate = |unit| unit >= 0xD800 and unit <= 0xDBFF
+
+is_low_surrogate : U16 -> Bool
+is_low_surrogate = |unit| unit >= 0xDC00 and unit <= 0xDFFF
+
+is_surrogate : U16 -> Bool
+is_surrogate = |unit| unit >= 0xD800 and unit <= 0xDFFF
+
+ends_with_u8 : List(U8), U8 -> Bool
+ends_with_u8 = |list, suffix|
+	match list {
+		[.., last] => last == suffix
+		[] => False
+	}
+
+ends_with_u16 : List(U16), U16 -> Bool
+ends_with_u16 = |list, suffix|
+	match list {
+		[.., last] => last == suffix
+		[] => False
+	}
+
+ends_with_two_u8 : List(U8), U8, U8 -> Bool
+ends_with_two_u8 = |list, first_suffix, second_suffix|
+	match list {
+		[.., first, second] => first == first_suffix and second == second_suffix
+		_ => False
+	}
+
+ends_with_two_u16 : List(U16), U16, U16 -> Bool
+ends_with_two_u16 = |list, first_suffix, second_suffix|
+	match list {
+		[.., first, second] => first == first_suffix and second == second_suffix
+		_ => False
+	}
+
+after_index_u8 : List(U8), U64 -> List(U8)
+after_index_u8 = |list, index| {
+	start = index + 1
+	List.sublist(list, { start, len: List.len(list) - start })
+}
+
+after_index_u16 : List(U16), U64 -> List(U16)
+after_index_u16 = |list, index| {
+	start = index + 1
+	List.sublist(list, { start, len: List.len(list) - start })
+}
+
+ext_units_u8 : List(U8) -> List(U8)
+ext_units_u8 = |units|
+	match List.find_first_index(units, |unit| unit == '.') {
+		Err(NotFound) => []
+		Ok(0) => {
+			rest = List.drop_first(units, 1)
+
+			match List.find_first_index(rest, |unit| unit == '.') {
+				Err(NotFound) => []
+				Ok(dot_index) => after_index_u8(rest, dot_index)
+			}
+		}
+		Ok(dot_index) => after_index_u8(units, dot_index)
+	}
+
+ext_units_u16 : List(U16) -> List(U16)
+ext_units_u16 = |units|
+	match List.find_first_index(units, |unit| unit == '.') {
+		Err(NotFound) => []
+		Ok(0) => {
+			rest = List.drop_first(units, 1)
+
+			match List.find_first_index(rest, |unit| unit == '.') {
+				Err(NotFound) => []
+				Ok(dot_index) => after_index_u16(rest, dot_index)
+			}
+		}
+		Ok(dot_index) => after_index_u16(units, dot_index)
+	}
