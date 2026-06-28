@@ -19,7 +19,7 @@ concurrency:
 jobs:
   build-bundle:
     name: Build package bundle
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     outputs:
       bundle_filename: ${{ steps.bundle.outputs.bundle_filename }}
     defaults:
@@ -79,7 +79,7 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - ubuntu-24.04
+          - ubuntu-latest
           - macos-15-intel
           - windows-2025
     defaults:
@@ -116,7 +116,7 @@ jobs:
     needs:
       - build-bundle
       - test-bundle
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch'
     permissions:
       contents: write
