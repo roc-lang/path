@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  pull_request:
+  schedule:
+    # Run daily at 10 AM UTC, after the nightlies are typically published.
+    - cron: '0 10 * * *'
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: package examples (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-15-intel
+          - windows-2025
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # 2.2.1
+        with:
+          version: 0.16.0
+          use-cache: false
+
+      - name: Install Roc
+        uses: roc-lang/setup-roc@bd311e2fb815a3d2255f7ee14a922f0b736e020b
+        with:
+          # Installs the latest nightly from https://github.com/roc-lang/nightlies
+          version: nightly-new-compiler
+
+      - name: Run checks
+        run: ci/all_tests.sh
