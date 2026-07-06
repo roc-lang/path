@@ -16,7 +16,9 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-LOCAL_PACKAGE = 'path: "../package/main.roc"'
+LOCAL_PACKAGE_PATH = "../package/main.roc"
+RELEASE_PACKAGE_PREFIX = "https://github.com/roc-lang/path/releases/download/"
+PACKAGE_DEPENDENCY_RE = re.compile(r'(?m)^(?P<indent>\s*)path:\s*"(?P<dependency>[^"]+)",\s*$')
 
 
 def run(cmd: list[str], *, cwd: Path = ROOT) -> subprocess.CompletedProcess[str]:
@@ -75,10 +77,25 @@ def copy_examples_with_bundle_url(examples_dir: Path, bundle_url: str) -> list[P
     examples = sorted(target_dir.glob("*.roc"))
     for example in examples:
         source = example.read_text()
-        if LOCAL_PACKAGE not in source:
-            raise SystemExit(f"{example.name} does not use the expected local package dependency")
+        rewritten = None
 
-        example.write_text(source.replace(LOCAL_PACKAGE, f'path: "{bundle_url}"'))
+        for match in PACKAGE_DEPENDENCY_RE.finditer(source):
+            dependency = match.group("dependency")
+            is_local_package = dependency == LOCAL_PACKAGE_PATH
+            is_release_package = dependency.startswith(RELEASE_PACKAGE_PREFIX) and dependency.endswith(".tar.zst")
+
+            if is_local_package or is_release_package:
+                rewritten = (
+                    source[: match.start()]
+                    + f'{match.group("indent")}path: "{bundle_url}",'
+                    + source[match.end() :]
+                )
+                break
+
+        if rewritten is None:
+            raise SystemExit(f"{example.name} does not use the expected path package dependency")
+
+        example.write_text(rewritten)
 
     return examples
 
