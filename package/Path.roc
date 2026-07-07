@@ -1,47 +1,16 @@
-expect Path.unix("abc") == Unix([97, 98, 99])
-expect Path.unix_bytes([97, 98, 99]) == Unix([97, 98, 99])
-expect Path.windows("abc") == Windows([97, 98, 99])
-expect Path.windows_u16s([97, 98, 99]) == Windows([97, 98, 99])
-
-expect Path.to_raw(Path.unix_bytes([97, 255, 98])) == UnixBytes([97, 255, 98])
-expect Path.from_raw(WindowsU16s([97, 98, 99])) == Path.windows("abc")
-
-expect Path.to_str(Path.unix("abc")) == Ok("abc")
-expect Path.to_str(Path.unix_bytes([97, 255, 98])) == Err(InvalidStr(1))
-expect Path.to_str(Path.windows("abc")) == Ok("abc")
-expect Path.to_str(Path.windows_u16s([0xD800])) == Err(InvalidStr(0))
-
-expect Path.to_str(Path.windows_u16s([0xD83D, 0xDC26])) == Ok(Str.from_utf8_lossy([0xF0, 0x9F, 0x90, 0xA6]))
-
-expect Path.display(Path.unix_bytes([97, 255, 98])) == Str.from_utf8_lossy([97, 255, 98])
-expect Path.display(Path.windows_u16s([0xD800, 97])) == Str.from_utf8_lossy([0xEF, 0xBF, 0xBD, 97])
-
-expect Path.filename(Path.unix("foo/bar.txt")) == Ok(Path.unix("bar.txt"))
-expect Path.filename(Path.unix("foo/bar")) == Ok(Path.unix("bar"))
-expect Path.filename(Path.unix("foo/bar/")) == Err(IsDirPath)
-expect Path.filename(Path.windows("foo\\bar\\")) == Err(IsDirPath)
-expect Path.filename(Path.unix("foo/bar..")) == Err(EndsInDots)
-expect Path.filename(Path.unix("foo")) == Ok(Path.unix("foo"))
-expect Path.filename(Path.unix("")) == Ok(Path.unix(""))
-
-expect Path.ext(Path.unix("foo/bar.txt")) == Ok(Path.unix("txt"))
-expect Path.ext(Path.unix("foo/bar.")) == Ok(Path.unix(""))
-expect Path.ext(Path.unix("foo/.bar.txt")) == Ok(Path.unix("txt"))
-expect Path.ext(Path.unix("foo/bar")) == Ok(Path.unix(""))
-expect Path.ext(Path.unix("foo/.bar")) == Ok(Path.unix(""))
-expect Path.ext(Path.unix("foo/bar.baz.txt")) == Ok(Path.unix("baz.txt"))
-expect Path.ext(Path.unix("foo/.bar.baz.txt")) == Ok(Path.unix("baz.txt"))
-expect Path.ext(Path.unix("foo/bar/")) == Err(IsDirPath)
-expect Path.ext(Path.unix("foo/bar..")) == Err(EndsInDots)
-expect Path.ext(Path.unix("")) == Ok(Path.unix(""))
-
-expect Path.join(Path.unix("foo"), "bar") == Path.unix("foo/bar")
-expect Path.join(Path.windows("foo"), "bar") == Path.windows("foo\\bar")
-
 Path :: [
+	Utf8(Str),
 	Unix(List(U8)),
 	Windows(List(U16)),
 ].{
+
+	## Create a UTF-8 text path.
+	utf8 : Str -> Path
+	utf8 = |str| Utf8(str)
+
+	## Create a UTF-8 text path from a quoted literal.
+	from_quote : Str -> Try(Path, [BadQuotedBytes(Str)])
+	from_quote = |str| Ok(Utf8(str))
 
 	## Create a Unix path from a Roc string by storing its UTF-8 bytes.
 	unix : Str -> Path
@@ -63,6 +32,8 @@ Path :: [
 	to_str : Path -> Try(Str, [InvalidStr(U64)])
 	to_str = |path|
 		match path {
+			Utf8(str) => Ok(str)
+
 			Unix(bytes) =>
 				match Str.from_utf8(bytes) {
 					Ok(str) => Ok(str)
@@ -76,6 +47,7 @@ Path :: [
 	display : Path -> Str
 	display = |path|
 		match path {
+			Utf8(str) => str
 			Unix(bytes) => Str.from_utf8_lossy(bytes)
 			Windows(u16s) => Str.from_utf8_lossy(utf16_to_utf8_lossy(u16s))
 		}
@@ -84,6 +56,21 @@ Path :: [
 	filename : Path -> Try(Path, [IsDirPath, EndsInDots])
 	filename = |path|
 		match path {
+			Utf8(str) => {
+				bytes = Str.to_utf8(str)
+
+				if ends_with_u8(bytes, '/') {
+					Err(IsDirPath)
+				} else if ends_with_two_u8(bytes, '.', '.') {
+					Err(EndsInDots)
+				} else {
+					match List.find_last_index(bytes, |byte| byte == '/') {
+						Ok(last_sep_index) => Ok(Utf8(str_from_valid_utf8(after_index_u8(bytes, last_sep_index))))
+						Err(NotFound) => Ok(path)
+					}
+				}
+			}
+
 			Unix(bytes) =>
 				if ends_with_u8(bytes, '/') {
 					Err(IsDirPath)
@@ -114,6 +101,7 @@ Path :: [
 	ext = |path|
 		match filename(path) {
 			Err(err) => Err(err)
+			Ok(Utf8(str)) => Ok(Utf8(str_from_valid_utf8(ext_units_u8(Str.to_utf8(str)))))
 			Ok(Unix(bytes)) => Ok(Unix(ext_units_u8(bytes)))
 			Ok(Windows(u16s)) => Ok(Windows(ext_units_u16(u16s)))
 		}
@@ -122,26 +110,38 @@ Path :: [
 	join : Path, Str -> Path
 	join = |path, str|
 		match path {
+			Utf8(path_str) => Utf8(path_str.concat("/").concat(str))
 			Unix(bytes) => Unix(bytes.append('/').concat(Str.to_utf8(str)))
 			Windows(u16s) => Windows(u16s.append('\\').concat(str_to_utf16(str)))
 		}
 
 	## Expose the raw OS-specific representation.
-	to_raw : Path -> [UnixBytes(List(U8)), WindowsU16s(List(U16))]
+	to_raw : Path -> [Utf8(Str), UnixBytes(List(U8)), WindowsU16s(List(U16))]
 	to_raw = |path|
 		match path {
+			Utf8(str) => Utf8(str)
 			Unix(bytes) => UnixBytes(bytes)
 			Windows(u16s) => WindowsU16s(u16s)
 		}
 
 	## Build a path from the raw OS-specific representation.
-	from_raw : [UnixBytes(List(U8)), WindowsU16s(List(U16))] -> Path
+	from_raw : [Utf8(Str), UnixBytes(List(U8)), WindowsU16s(List(U16))] -> Path
 	from_raw = |raw|
 		match raw {
+			Utf8(str) => Utf8(str)
 			UnixBytes(bytes) => Unix(bytes)
 			WindowsU16s(u16s) => Windows(u16s)
 		}
 }
+
+str_from_valid_utf8 : List(U8) -> Str
+str_from_valid_utf8 = |bytes|
+	match Str.from_utf8(bytes) {
+		Ok(str) => str
+		Err(_) => {
+			crash "A valid UTF-8 path contained invalid UTF-8 after ASCII path slicing."
+		}
+	}
 
 str_to_utf16 : Str -> List(U16)
 str_to_utf16 = |str| utf8_to_utf16(Str.to_utf8(str), [])
@@ -340,3 +340,95 @@ ext_units_u16 = |units|
 		}
 		Ok(dot_index) => after_index_u16(units, dot_index)
 	}
+
+quoted_literal_path : Path
+quoted_literal_path = "config.txt"
+
+path_identity : Path -> Path
+path_identity = |path| path
+
+## Constructors preserve Unix, Windows, and UTF-8 path representations.
+expect Path.unix("abc") == Unix([97, 98, 99])
+expect Path.unix_bytes([97, 98, 99]) == Unix([97, 98, 99])
+expect Path.windows("abc") == Windows([97, 98, 99])
+expect Path.windows_u16s([97, 98, 99]) == Windows([97, 98, 99])
+expect Path.utf8("abc") == Utf8("abc")
+
+## Quoted literals dispatch to UTF-8 paths through `from_quote`.
+expect Path.from_quote("config.txt") == Ok(Path.utf8("config.txt"))
+expect quoted_literal_path == Path.utf8("config.txt")
+expect path_identity("nested/config.txt") == Path.utf8("nested/config.txt")
+
+## Raw conversion roundtrips every representation without validating raw OS data.
+expect Path.to_raw(Path.unix_bytes([97, 255, 98])) == UnixBytes([97, 255, 98])
+expect Path.to_raw(Path.windows_u16s([0xD800, 97])) == WindowsU16s([0xD800, 97])
+expect Path.to_raw(Path.utf8("abc")) == Utf8("abc")
+expect Path.from_raw(UnixBytes([97, 255, 98])) == Path.unix_bytes([97, 255, 98])
+expect Path.from_raw(WindowsU16s([97, 98, 99])) == Path.windows("abc")
+expect Path.from_raw(Utf8("abc")) == Path.utf8("abc")
+
+## `to_str` succeeds for valid text and reports the first invalid raw unit.
+expect Path.to_str(Path.unix("abc")) == Ok("abc")
+expect Path.to_str(Path.unix_bytes([97, 255, 98])) == Err(InvalidStr(1))
+expect Path.to_str(Path.windows("abc")) == Ok("abc")
+expect Path.to_str(Path.windows_u16s([0xD800])) == Err(InvalidStr(0))
+expect Path.to_str(Path.utf8("abc")) == Ok("abc")
+expect Path.to_str(Path.windows_u16s([0xD83D, 0xDC26])) == Ok(Str.from_utf8_lossy([0xF0, 0x9F, 0x90, 0xA6]))
+
+## `display` preserves valid text and replaces invalid raw units.
+expect Path.display(Path.unix("abc")) == "abc"
+expect Path.display(Path.unix_bytes([97, 255, 98])) == Str.from_utf8_lossy([97, 255, 98])
+expect Path.display(Path.windows("abc")) == "abc"
+expect Path.display(Path.windows_u16s([0xD800, 97])) == Str.from_utf8_lossy([0xEF, 0xBF, 0xBD, 97])
+expect Path.display(Path.utf8("abc")) == "abc"
+
+## `filename` returns everything after the last separator.
+expect Path.filename(Path.unix("foo/bar.txt")) == Ok(Path.unix("bar.txt"))
+expect Path.filename(Path.unix("foo/bar")) == Ok(Path.unix("bar"))
+expect Path.filename(Path.unix("foo")) == Ok(Path.unix("foo"))
+expect Path.filename(Path.unix("")) == Ok(Path.unix(""))
+expect Path.filename(Path.windows("foo\\bar.txt")) == Ok(Path.windows("bar.txt"))
+expect Path.filename(Path.windows("foo/bar.txt")) == Ok(Path.windows("bar.txt"))
+expect Path.filename(Path.windows("foo")) == Ok(Path.windows("foo"))
+expect Path.filename(Path.windows("")) == Ok(Path.windows(""))
+expect Path.filename(Path.utf8("foo/bar.txt")) == Ok(Path.utf8("bar.txt"))
+expect Path.filename(Path.utf8("foo")) == Ok(Path.utf8("foo"))
+expect Path.filename(Path.utf8("")) == Ok(Path.utf8(""))
+
+## `filename` rejects directory paths and filenames ending in two dots.
+expect Path.filename(Path.unix("foo/bar/")) == Err(IsDirPath)
+expect Path.filename(Path.unix("foo/bar..")) == Err(EndsInDots)
+expect Path.filename(Path.windows("foo\\bar\\")) == Err(IsDirPath)
+expect Path.filename(Path.windows("foo/bar..")) == Err(EndsInDots)
+expect Path.filename(Path.utf8("foo/bar/")) == Err(IsDirPath)
+expect Path.filename(Path.utf8("foo/bar..")) == Err(EndsInDots)
+
+## `ext` returns the filename extension without the leading dot.
+expect Path.ext(Path.unix("foo/bar.txt")) == Ok(Path.unix("txt"))
+expect Path.ext(Path.unix("foo/bar.")) == Ok(Path.unix(""))
+expect Path.ext(Path.unix("foo/.bar.txt")) == Ok(Path.unix("txt"))
+expect Path.ext(Path.unix("foo/bar")) == Ok(Path.unix(""))
+expect Path.ext(Path.unix("foo/.bar")) == Ok(Path.unix(""))
+expect Path.ext(Path.unix("foo/bar.baz.txt")) == Ok(Path.unix("baz.txt"))
+expect Path.ext(Path.unix("foo/.bar.baz.txt")) == Ok(Path.unix("baz.txt"))
+expect Path.ext(Path.unix("")) == Ok(Path.unix(""))
+expect Path.ext(Path.windows("foo\\bar.txt")) == Ok(Path.windows("txt"))
+expect Path.ext(Path.windows("foo\\bar")) == Ok(Path.windows(""))
+expect Path.ext(Path.windows("")) == Ok(Path.windows(""))
+expect Path.ext(Path.utf8("foo/bar.txt")) == Ok(Path.utf8("txt"))
+expect Path.ext(Path.utf8("foo/.bar")) == Ok(Path.utf8(""))
+expect Path.ext(Path.utf8("foo/bar.baz.txt")) == Ok(Path.utf8("baz.txt"))
+expect Path.ext(Path.utf8("")) == Ok(Path.utf8(""))
+
+## `ext` forwards filename errors for directory paths and dot endings.
+expect Path.ext(Path.unix("foo/bar/")) == Err(IsDirPath)
+expect Path.ext(Path.unix("foo/bar..")) == Err(EndsInDots)
+expect Path.ext(Path.windows("foo\\bar\\")) == Err(IsDirPath)
+expect Path.ext(Path.windows("foo\\bar..")) == Err(EndsInDots)
+expect Path.ext(Path.utf8("foo/bar/")) == Err(IsDirPath)
+expect Path.ext(Path.utf8("foo/bar..")) == Err(EndsInDots)
+
+## `join` appends a representation-specific separator and text component.
+expect Path.join(Path.unix("foo"), "bar") == Path.unix("foo/bar")
+expect Path.join(Path.windows("foo"), "bar") == Path.windows("foo\\bar")
+expect Path.join(Path.utf8("foo"), "bar") == Path.utf8("foo/bar")

@@ -1,16 +1,25 @@
 app [main!] {
 	pf: platform "https://github.com/lukewilliamboswell/roc-platform-template-zig/releases/download/1.0.0/AnZoxzoGPtSGQ15EQh6pBeeaHJ7aizP9MQhK81dES3Uq.tar.zst",
-	path: "https://github.com/roc-lang/path/releases/download/0.1/8p8iryUUorAFTUDeqYcwc9bFYSwpbVqhYpuHvRAS5Cq4.tar.zst",
+	path: "../package/main.roc",
 }
 
 import pf.Stdout
 import path.Path
+
+quoted_path : Path.Path
+quoted_path = "config.txt"
 
 main! : List(Str) => Try({}, [Exit(I32), StdoutErr(Str), ..])
 main! = |_args| {
 	Stdout.line!("Run `roc test examples/tests.roc` to exercise the path package examples.")?
 	Ok({})
 }
+
+expect quoted_path == Path.utf8("config.txt")
+
+expect Path.from_quote("config.txt") == Ok(Path.utf8("config.txt"))
+
+expect Path.to_raw(Path.utf8("src/main.roc")) == Utf8("src/main.roc")
 
 expect Path.to_raw(Path.unix("src/main.roc")) == UnixBytes(Str.to_utf8("src/main.roc"))
 
@@ -25,3 +34,5 @@ expect Path.to_raw(Path.windows("src\\main.roc")) == WindowsU16s([115, 114, 99, 
 expect Path.filename(Path.unix("src/main.roc")) == Ok(Path.unix("main.roc"))
 
 expect Path.ext(Path.unix("src/main.roc")) == Ok(Path.unix("roc"))
+
+expect Path.join("src", "main.roc") == Path.utf8("src/main.roc")
