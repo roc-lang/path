@@ -12,6 +12,12 @@ Path :: [
 	from_quote : Str -> Try(Path, [BadQuotedBytes(Str)])
 	from_quote = |str| Ok(Utf8(str))
 
+	## Create a UTF-8 path from an interpolated string literal.
+	## This performs textual concatenation; use [join] for path-component joining.
+	from_interpolation : Str, Iter((Str, Str)) -> Path
+	from_interpolation = |first, rest|
+		Utf8(rest.fold(first, |acc, (interpolated, segment)| acc.concat(interpolated).concat(segment)))
+
 	## Create a Unix path from a Roc string by storing its UTF-8 bytes.
 	unix : Str -> Path
 	unix = |str| Unix(Str.to_utf8(str))
@@ -51,6 +57,23 @@ Path :: [
 			Unix(bytes) => Str.from_utf8_lossy(bytes)
 			Windows(u16s) => Str.from_utf8_lossy(utf16_to_utf8_lossy(u16s))
 		}
+
+	## Render a path for debugging without losing raw OS units.
+	to_inspect : Path -> Str
+	to_inspect = |path|
+		match path {
+			Utf8(str) => "Path.utf8(${Json.to_str(str)})"
+			Unix(bytes) =>
+				match Str.from_utf8(bytes) {
+					Ok(str) => "Path.unix(${Json.to_str(str)})"
+					Err(_) => "Path.unix_bytes(${Str.inspect(bytes)})"
+				}
+			Windows(u16s) =>
+				match utf16_to_str(u16s) {
+					Ok(str) => "Path.windows(${Json.to_str(str)})"
+					Err(_) => "Path.windows_u16s(${Str.inspect(u16s)})"
+				}
+			}
 
 	## Returns everything after the last directory separator.
 	filename : Path -> Try(Path, [IsDirPath, EndsInDots])
@@ -135,6 +158,9 @@ Path :: [
 
 	## Compare paths by their exact tagged representation.
 	is_eq : _
+
+	## Hash paths consistently with exact tagged equality.
+	to_hash : _
 }
 
 str_from_valid_utf8 : List(U8) -> Str
@@ -349,6 +375,25 @@ quoted_literal_path = "config.txt"
 
 path_identity : Path -> Path
 path_identity = |path| path
+
+## Interpolation creates a UTF-8 representation.
+expect {
+	directory = "config"
+	path : Path
+	path = "${directory}/app.toml"
+	path == Path.utf8("config/app.toml")
+}
+
+## Inspection identifies the representation and preserves invalid raw units.
+expect Str.inspect(Path.utf8("a\nb")) == "Path.utf8(\"a\\nb\")"
+expect Str.inspect(Path.unix("abc")) == "Path.unix(\"abc\")"
+expect Str.inspect(Path.unix_bytes([97, 255, 98])) == "Path.unix_bytes([97, 255, 98])"
+expect Str.inspect(Path.windows("abc")) == "Path.windows(\"abc\")"
+expect Str.inspect(Path.windows_u16s([0xD800, 97])) == "Path.windows_u16s([55296, 97])"
+
+## Equality and hashing preserve representation identity.
+expect Path.utf8("abc") != Path.unix("abc")
+expect Dict.single(Path.unix_bytes([97, 255]), "found").get(Path.unix_bytes([97, 255])) == Ok("found")
 
 ## Constructors preserve Unix, Windows, and UTF-8 path representations.
 expect Path.unix("abc") == Unix([97, 98, 99])
