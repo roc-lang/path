@@ -26,6 +26,13 @@ main_file = Path.join("src", "main.roc")
 Quoted literals are stored as `Path.utf8` values. Platforms can convert the
 `Utf8` raw case to the host-native representation at the boundary.
 
+Interpolated literals also produce UTF-8 paths and perform textual
+concatenation. Use `Path.join` when adding a path component instead.
+
+`Path` equality and hashing preserve the exact tagged representation, so a
+UTF-8 path is distinct from Unix bytes or Windows units with the same text.
+`Str.inspect` identifies that representation without losing invalid raw units.
+
 ## Examples
 
 Run an example with:
