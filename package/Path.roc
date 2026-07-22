@@ -132,6 +132,10 @@ Path :: [
 			UnixBytes(bytes) => Unix(bytes)
 			WindowsU16s(u16s) => Windows(u16s)
 		}
+
+	## Compare paths by their exact tagged representation.
+	is_eq : Path, Path -> Bool
+	is_eq = |left, right| to_raw(left) == to_raw(right)
 }
 
 str_from_valid_utf8 : List(U8) -> Str
