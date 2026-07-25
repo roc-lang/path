@@ -19,7 +19,7 @@ concurrency:
 jobs:
   build-bundle:
     name: Build package bundle
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       bundle_filename: ${{ steps.bundle.outputs.bundle_filename }}
     defaults:
@@ -28,7 +28,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Zig
         uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # 2.2.1
@@ -65,7 +65,7 @@ jobs:
           echo "bundle_filename=$BUNDLE_FILENAME" >> "$GITHUB_OUTPUT"
 
       - name: Upload package bundle artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: package-bundle
           path: dist/${{ steps.bundle.outputs.bundle_filename }}
@@ -79,8 +79,9 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - ubuntu-latest
-          - macos-15-intel
+          - ubuntu-26.04
+          - macos-26-intel
+          - macos-26
           - windows-2025
     defaults:
       run:
@@ -88,7 +89,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Zig
         uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # 2.2.1
@@ -103,7 +104,7 @@ jobs:
           version: nightly-new-compiler
 
       - name: Download package bundle artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: package-bundle
           path: dist
@@ -126,10 +127,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Download package bundle artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: package-bundle
           path: dist
